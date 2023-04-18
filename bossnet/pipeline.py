@@ -31,16 +31,33 @@ class StellarParameters:
     LOGG: DataStats
     FEH: DataStats
 
-PredictionOutput = namedtuple('ModelOutput', ['log_G', 'log_Teff', 'FeH'])
+stellar_parameter_stats = StellarParameters(
+    LOGTEFF=DataStats(
+        MEAN=,
+        STD=,
+        PNMAX=,
+        PNMIN=,
+    ),
+    LOGG=DataStats(
+        MEAN=,
+        STD=,
+        PNMAX=,
+        PNMIN=,
+    ),
+    FEH=DataStats(
+        MEAN=,
+        STD=,
+        PNMAX=,
+        PNMIN=,
+    ),
+)
 
-UncertaintyOutput = namedtuple('ModelOutput', [
+PredictionOutput = namedtuple('PredictionOutput', ['log_G', 'log_Teff', 'FeH'])
+
+UncertaintyOutput = namedtuple('UncertaintyOutput', [
     'log_G_median', 'log_Teff_median', 'log_Feh_median',
     'log_G_std', 'log_Teff_std', 'log_Feh_std'
 ])
-
-stellar_parameter_stats_path = os.path.join(os.path.split(os.path.abspath(__file__))[0], "param_stats.yaml")
-stellar_parameter_stats_dict = open_yaml(stellar_parameter_stats_path)
-stellar_parameter_stats = stats_from_dict(stellar_parameter_stats_dict, StellarParameters)
 
 def unnormalize(X: torch.Tensor, mean: float, std: float) -> torch.Tensor:
     """
@@ -56,14 +73,14 @@ def unnormalize(X: torch.Tensor, mean: float, std: float) -> torch.Tensor:
     """
     return X * std + mean
 
-def unnormalize_predictions(X: torch.Tensor) -> torch.Tensor:
+def unnormalize_predictions(predictions: torch.Tensor) -> torch.Tensor:
     """
     The unnormalize_predictions function takes a tensor X of shape (batch_size, 3) and unnormalizes 
     each of its three columns using the mean and standard deviation of the corresponding DataStats 
     objects. Specifically, the first column corresponds to LOGG, the second to LOGTEFF, and the third to FEH.
 
     Args:
-    - X: torch.Tensor, Input tensor of shape (batch_size, 3).
+    - predictions: torch.Tensor, Input tensor of shape (batch_size, 3).
     - stellar_parameter_stats: StellarParameters, an object containing the mean and standard deviation of 
       the three columns of X.
 
@@ -71,11 +88,11 @@ def unnormalize_predictions(X: torch.Tensor) -> torch.Tensor:
     - torch.Tensor: Output tensor of shape (batch_size, 3) where each column has been unnormalized using 
       the mean and standard deviation stored in stellar_parameter_stats.
     """
-    X[:, 0] = unnormalize(X[:, 0], stellar_parameter_stats.LOGG.MEAN, stellar_parameter_stats.LOGG.STD)
-    X[:, 1] = unnormalize(X[:, 1], stellar_parameter_stats.LOGTEFF.MEAN, stellar_parameter_stats.LOGTEFF.STD)
-    X[:, 2] = unnormalize(X[:, 2], stellar_parameter_stats.FEH.MEAN, stellar_parameter_stats.FEH.STD)
+    predictions[:, 0] = unnormalize(predictions[:, 0], stellar_parameter_stats.LOGG.MEAN, stellar_parameter_stats.LOGG.STD)
+    predictions[:, 1] = unnormalize(predictions[:, 1], stellar_parameter_stats.LOGTEFF.MEAN, stellar_parameter_stats.LOGTEFF.STD)
+    predictions[:, 2] = unnormalize(predictions[:, 2], stellar_parameter_stats.FEH.MEAN, stellar_parameter_stats.FEH.STD)
 
-    return X
+    return predictions
 
 def franken_load(load_path: str, chunks: int) -> OrderedDict:
     """
@@ -116,7 +133,19 @@ def franken_load(load_path: str, chunks: int) -> OrderedDict:
 
     return state_dict
 
-def create_uncertainties_batch(flux: torch.Tensor, error: torch.Tensor, num_uncertainty_draws: int):
+def create_uncertainties_batch(flux: torch.Tensor, error: torch.Tensor, num_uncertainty_draws: int) -> torch.Tensor:
+    """
+    Creates a batch of flux tensors with added noise from the specified error tensors.
+
+    Args:
+    - flux: torch.Tensor, A torch.Tensor representing the flux values of the data.
+    - error: torch.Tensor, A torch.Tensor representing the error values of the data.
+    - num_uncertainty_draws: int, The number of times to draw noise samples to create a batch of flux tensors.
+
+    Returns:
+    - flux_with_noise: torch.Tensor, A torch.Tensor representing the batch of flux tensors with added noise from the 
+      specified error tensors.
+    """
     normal_sample = torch.randn((num_uncertainty_draws, *error.shape[-2:]))
     return flux + error * normal_sample
 
@@ -200,7 +229,6 @@ class Pipeline():
         self.verbose = verbose
         self.device: torch.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.dataset: BOSSDataset = BOSSDataset(fits_table_path, data_path)
-        self.dataset[0]
         self.model: BOSSDataset = BossNet()
         self._load_model()
         self.output_file = open(output_path, "a+") if output_path else sys.stdout

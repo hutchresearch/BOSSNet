@@ -44,33 +44,6 @@ class DataSource(str, Enum):
     LAMOSTDR7="lamost_dr7"
     LAMOSTDR8="lamost_dr8"
 
-def extract_healpix_paths(hdul: fits.HDUList) -> List[str]:
-    """
-    A function that extracts a list of HEALPix paths from an astropy `fits.HDUList` object.
-
-    Args:
-    - hdul: fits.HDUList, an astropy `fits.HDUList` object containing the HEALPix paths.
-
-    Returns:
-    - paths: List[str], a list of HEALPix paths extracted from the input `fits.HDUList` object.
-    """
-    data = hdul[1].data
-    paths = data["HEALPIX_PATH"].tolist()
-    return paths
-
-def join_healpix_paths(root_path: str, healpix_paths: str) -> List[str]:
-    """
-    A function that joins a root path and a list of HEALPix paths to create a list of file paths.
-
-    Args:
-    - root_path: str, the root path to be joined with the HEALPix paths.
-    - healpix_paths: List[str], a list of HEALPix paths to be joined with the root path.
-
-    Returns:
-    - paths: List[str], a list of file paths created by joining the input root path with the input HEALPix paths.
-    """
-    return [os.path.join(root_path, healpix_path.replace("$MWM_HEALPIX/", "")) for healpix_path in healpix_paths]
-
 def reverse_inverse_error(inverse_error: np.array, default_error: int) -> np.array:
     """
     A function that calculates error values from inverse errors.
@@ -172,7 +145,8 @@ def open_boss_fits(file_path: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Te
 
 def get_fits_function(data_source: DataSource) -> Callable:
     """ 
-    The function get_fits_function returns the appropriate function for opening a FITS file based on the data source specified.
+    The function get_fits_function returns the appropriate function for opening a FITS file based on 
+    the data source specified.
 
     Args:
     - data_source: Enum, The data source enum specifying which type of FITS file to open.
@@ -187,47 +161,53 @@ def get_fits_function(data_source: DataSource) -> Callable:
     if data_source == DataSource.LAMOSTDR8:
         return open_lamost_fitsDR8
 
+def read_file_paths(file_path):
+    """
+    The function read_file_paths reads a text file containing file paths separated by new lines and 
+    returns a list of those file paths.
+
+    Args:
+    - file_path: str, The path to the text file containing the file paths separated by new lines.
+
+    Returns:
+    - A list of strings, each string representing a file path read from the input file.
+    """
+    with open(file_path, 'r') as file:
+        file_paths = [line.strip() for line in file]
+    return file_paths
 
 class BOSSDataset(torch.utils.data.Dataset):
     def __init__(
         self, 
-        fits_table_path: str, 
-        data_path: str, 
+        spectra_paths: str,
         data_source: Optional[Union[DataSource, str]]=DataSource.BOSS,
     ) -> None:
         """
-        Initializes a BOSSDataset instance with paths to the FITS table and the directory containing the 
-        LAMOST or BOSS FITS files, as well as optional metadata statistics, data source, and noise flux flag.
-        
+        Initializes a BOSSDataset instance with a path to a plain text file containing paths to spectra FITS files 
+        and the data source, which specifies which function to use for opening the FITS files.
+
         Args:
-        - fits_table_path: str, The path to the FITS table containing metadata for the LAMOST or BOSS FITS files.
-        - data_path: str, The path to the directory containing the LAMOST or BOSS FITS files.
-        - mstats: Optional[MetadataStats], Optional metadata statistics to normalize the metadata.
+        - spectra_paths: str, The path to a plain text file containing paths to spectra FITS files.
         - data_source: Optional[Union[DataSource, str]], Optional data source to specify which function to use 
-          for opening the FITS files.
-        - noise_flux: Optional[bool], Optional flag to add noise to the flux values.
+          for opening the FITS files. Default is DataSource.BOSS.
 
         Returns:
         None
         """
-        with fits.open(fits_table_path) as hdul:
-            healpix_paths = extract_healpix_paths(hdul)
-
-        # TODO: Write way for Lamost to be used.
-        self.flux_paths = join_healpix_paths(data_path, healpix_paths)
+        self.flux_paths = read_file_paths(spectra_paths)
         self.open_fits = get_fits_function(data_source)
 
-    
     def __getitem__(self, index):
         """
-        Returns the flux and metadata for a specified index in the dataset.
+        Returns the flux, error and wavelength for a specified index in the dataset.
 
         Args:
-        - index: int, The index of the LAMOST or BOSS FITS file in the dataset.
+        - index: int, The index of the FITS file in the dataset.
 
         Returns:
         - flux: torch.Tensor, A torch.Tensor representing the flux values of the data.
-        - metadata: torch.Tensor, A torch.Tensor representing the metadata values of the data.
+        - error: torch.Tensor, A torch.Tensor representing the error values of the data.
+        - wavelength: torch.Tensor, A torch.Tensor representing the wavelength values of the data.
         """
         fits_file_path = self.flux_paths[index]
         flux, error, wavlen = self.open_fits(fits_file_path)
@@ -239,7 +219,7 @@ class BOSSDataset(torch.utils.data.Dataset):
         Returns the length of the dataset.
 
         Returns:
-        - length: int, The number of LAMOST or BOSS FITS files in the dataset.
+        - length: int, The number of FITS files in the dataset.
         """
         return len(self.flux_paths)
 
