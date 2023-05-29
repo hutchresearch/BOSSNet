@@ -55,15 +55,14 @@ class BossNet(torch.nn.Module):
       (batch_size, 3).
 
     Methods:
-    - forward(x, m): Performs a forward pass of the BossNet model given input spectra x and metadata m.
+    - forward(x): Performs a forward pass of the BossNet model given input spectra x and metadata m.
       Returns the predicted stellar parameters as a tensor of shape (batch_size, 3).
 
     Args:
     - x: torch.Tensor, Input tensor of shape (batch_size, 1, flux_length).
-    - m: torch.Tensor, Metadata tensor of shape (batch_size, 14).
 
     Returns:
-    - torch.Tensor, Output tensor of shape (batch_size, 3).
+    - torch.Tensor, Output tensor of shape (batch_size, 4).
     """
     def __init__(self) -> None:
         super(BossNet, self).__init__()
@@ -111,7 +110,7 @@ class BossNet(torch.nn.Module):
             LinearBlock(1024, 1024),
             LinearBlock(1024, 1024),
             LinearBlock(1024, 1024),
-            torch.nn.Linear(1024, 3),
+            torch.nn.Linear(1024, 4),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -126,7 +125,7 @@ class BossNet(torch.nn.Module):
         - m:torch.Tensor, Metadata tensor of shape (batch_size, 14).
 
         Returns:
-        - torch.Tensor: Output tensor of shape (batch_size, 3).
+        - torch.Tensor: Output tensor of shape (batch_size, 4).
         """
         pos = self.pos_enc(x)
         x = torch.hstack([x, pos])

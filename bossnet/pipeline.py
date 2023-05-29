@@ -67,10 +67,12 @@ class StellarParameters:
     - LOGTEFF: DataStats, representing the statistical properties of the effective temperature.
     - LOGG: DataStats, representing the statistical properties of the surface gravity.
     - FEH: DataStats, representing the statistical properties of the metallicity.
+    - RV: DataStats, representing the statistical properties of the radial velocity.
     """
     LOGTEFF: DataStats
     LOGG: DataStats
     FEH: DataStats
+    RV: DataStats
 
 # Unnormalization values for the stellar parameters.
 stellar_parameter_stats = StellarParameters(
@@ -92,15 +94,21 @@ stellar_parameter_stats = StellarParameters(
         PNMIN=-7.496200000000001,
         STD=0.5,
     ),
+    RV=DataStats(
+        MEAN=-7.4,
+        PNMAX=9.074319773706897,
+        PNMIN=-9.116415791127874,
+        STD=60.9
+    ),
 )
 
 # Data structure for the output of the model.
-PredictionOutput = namedtuple('PredictionOutput', ['log_G', 'log_Teff', 'FeH'])
+PredictionOutput = namedtuple('PredictionOutput', ['log_G', 'log_Teff', 'FeH', 'rv'])
 
 # Data structure for uncertainty predictions.
 UncertaintyOutput = namedtuple('UncertaintyOutput', [
-    'log_G_median', 'log_Teff_median', 'log_Feh_median',
-    'log_G_std', 'log_Teff_std', 'log_Feh_std'
+    'log_G_median', 'log_Teff_median', 'Feh_median', 'rv_median',
+    'log_G_std', 'log_Teff_std', 'Feh_std', 'rv_std'
 ])
 
 def unnormalize(X: torch.Tensor, mean: float, std: float) -> torch.Tensor:
@@ -121,20 +129,22 @@ def unnormalize_predictions(predictions: torch.Tensor) -> torch.Tensor:
     """
     The unnormalize_predictions function takes a tensor X of shape (batch_size, 3) and unnormalizes 
     each of its three columns using the mean and standard deviation of the corresponding DataStats 
-    objects. Specifically, the first column corresponds to LOGG, the second to LOGTEFF, and the third to FEH.
+    objects. Specifically, the first column corresponds to LOGG, the second to LOGTEFF, the third to FEH,
+    and the fourth to RV.
 
     Args:
-    - predictions: torch.Tensor, Input tensor of shape (batch_size, 3).
+    - predictions: torch.Tensor, Input tensor of shape (batch_size, 4).
     - stellar_parameter_stats: StellarParameters, an object containing the mean and standard deviation of 
       the three columns of X.
 
     Returns:
-    - torch.Tensor: Output tensor of shape (batch_size, 3) where each column has been unnormalized using 
+    - torch.Tensor: Output tensor of shape (batch_size, 4) where each column has been unnormalized using 
       the mean and standard deviation stored in stellar_parameter_stats.
     """
     predictions[:, 0] = unnormalize(predictions[:, 0], stellar_parameter_stats.LOGG.MEAN, stellar_parameter_stats.LOGG.STD)
     predictions[:, 1] = unnormalize(predictions[:, 1], stellar_parameter_stats.LOGTEFF.MEAN, stellar_parameter_stats.LOGTEFF.STD)
     predictions[:, 2] = unnormalize(predictions[:, 2], stellar_parameter_stats.FEH.MEAN, stellar_parameter_stats.FEH.STD)
+    predictions[:, 3] = unnormalize(predictions[:, 3], stellar_parameter_stats.RV.MEAN, stellar_parameter_stats.RV.STD)
 
     return predictions
 
@@ -241,35 +251,43 @@ def log_scale_flux(flux: torch.Tensor) -> torch.Tensor:
 
 class Pipeline():
     """
-    A class for running predictions using the BOSS dataset and BossNet model.
+    This class defines the pipeline for running predictions using the BossNet model.
 
     Args:
-        fits_table_path: str, The path to the FITS table.
-        data_path: str, The path to the BOSS spectra data.
-        output_path: Optional[str], The output path for writing predictions. If None,
-            predictions are written to sys.stdout. Default is None.
-        num_uncertainty_realizations: Optional[int], The number of uncertainty realizations
-            to calculate. If 0, standard predictions are made. Default is 0.
-        verbose: bool, Whether to print progress bars during prediction. Default is True.
+    - spectra_paths (str): The paths to the input spectra files.
+    - data_source (str, optional): The source of the data, default is "boss".
+    - output_file (str, optional): The file to which predictions will be written. If no output file is specified, 
+      then predictions will be written to standard out.
+    - num_uncertainty_draws (int, optional): The number of draws for uncertainty calculation, default is 0. If greater 
+      than 0, then uncertainties will be calculated.
+    - verbose (bool, optional): If set to True, verbose output will be enabled, default is False.
+
+    Attributes:
+    - verbose (bool): Verbose output flag.
+    - device (torch.device): The device to which tensors will be sent.
+    - dataset (BOSSDataset): The BOSS dataset.
+    - model (torch.nn.Module): The BossNet model.
+    - output_file (TextIO): The file to which predictions will be written.
+    - num_uncertainty_draws (int): The number of draws for uncertainty calculation.
+    - calculate_uncertainties (bool): A flag that indicates whether or not to calculate uncertainties.
+    - interpolate_flux (Callable): A function to interpolate the flux.
+
+    Methods:
+    - _load_model(): Loads the BossNet model from disk.
+    - predict(): Runs the pipeline to generate predictions.
+    - _make_prediction(loader: torch.utils.data.DataLoader): Makes predictions for the given data loader.
+    - _write_header(): Writes the header of the output file.
+    - _write_prediction(file_path: str, preds: PredictionOutput, uncertainty_preds: UncertaintyOutput): Writes the predictions for a given input to the output file.
     """
     def __init__(
         self, 
         spectra_paths: str,
         data_source: str = "boss",
-        output_path: Optional[str] = None,
+        output_file: Optional[str] = None,
         num_uncertainty_draws: Optional[int] = 0,
         verbose: bool = False
     ) -> None:
-        """
-        Initializes the Pipeline object.
 
-        Args:
-            fits_table_path: str, The path to the FITS table.
-            data_path: str, The path to the BOSS spectra data.
-            output_path: Optional[str], The output path for writing predictions. If None,
-                predictions are written to sys.stdout. Default is None.
-            verbose: bool, Whether to print progress bars during prediction. Default is True.
-        """
         self.verbose = verbose
         self.device: torch.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -278,7 +296,7 @@ class Pipeline():
         self._load_model()
 
         # If no output file specified, then predictions will be written to standard out.
-        self.output_file = open(output_path, "a+") if output_path else sys.stdout
+        self.output_file = open(output_file, "a+") if output_file else sys.stdout
 
         self.num_uncertainty_draws: int = num_uncertainty_draws
         self.calculate_uncertainties: bool = num_uncertainty_draws > 0
@@ -292,10 +310,7 @@ class Pipeline():
         """
         Loads the BossNet model from disk.
         """
-        # TODO: IF apogee, laod appogee model
-        # model_path = os.path.join(os.path.split(os.path.abspath(__file__))[0], "model_parts.pt")
-        # model_path = "/uufs/chpc.utah.edu/common/home/u6031723/logan_files/deconstructed_model/"
-        model_path = "/research/hutchinson/workspace/sizemol/junk/chopped/"
+        model_path = os.path.join(os.path.split(os.path.abspath(__file__))[0], "deconstructed_model")
         state_dict = franken_load(model_path, 10)
         self.model.load_state_dict(state_dict, strict=True)
         self.model.to(self.device)
@@ -311,31 +326,52 @@ class Pipeline():
             shuffle=False,
         )
 
+        prediction_generator = self._make_prediction(loader)
+
         self._write_header()
-        for i, (preds, uncertainty_preds) in enumerate(self._make_prediction(loader)):
-            self._write_prediction(self.dataset.flux_paths[i], preds, uncertainty_preds)
+        for path in self.dataset.flux_paths:
+            preds, uncertainty_preds = next(prediction_generator)
+            if preds:
+                self._write_prediction(path, preds, uncertainty_preds)
         self.output_file.close()
         
     def _make_prediction(self, loader: torch.utils.data.DataLoader):
         """
-        Runs the BossNet model on a DataLoader of spectra and metadata.
+        Generates predictions and their uncertainties for a given data loader.
 
         Args:
-            loader: torch.utils.data.DataLoader, A DataLoader containing spectra and metadata.
+            loader (torch.utils.data.DataLoader): A DataLoader object that loads the data for prediction.
 
         Yields:
-            torch.Tensor: The predicted logg, logteff, and feh for each spectrum.
+            preds (PredictionOutput): The prediction output for each data input, including 
+                the predicted logg, logTeff, FeH, and rv values.
+
+            uncertainty_preds (UncertaintyOutput): The uncertainties associated with the predictions,
+                including median values and standard deviations of the predicted logg, 
+                logTeff, FeH, and rv values. This will only be yielded if self.calculate_uncertainties 
+                is set to True, else None is yielded.
+
+        Raises:
+            OSError: If there is an issue loading the data (like missing or corrupt FITS file).
+
         """
-        loader = tqdm(loader) if self.verbose else loader
-        for spectra, error, wavlen in loader:
-            spectra, error, wavlen = spectra.to(self.device), error.to(self.device), wavlen.to(self.device)
+
+        loader = iter(tqdm(loader, desc="Evaluating Model: ", file=sys.stderr) if self.verbose else loader)
+        while loader:
+
+            try:
+                spectra, error, wavlen = next(loader)
+            except (OSError, TypeError):
+                if self.verbose:
+                    print(f"Missing, empty, or corrupt FITS file. ({path})", file=sys.stderr)
+                    yield None, None
 
             # Interpolate and log scale spectra
             interp_spectra = self.interpolate_flux(spectra, wavlen)
             normalized_spectra = log_scale_flux(interp_spectra).float()
 
             # Calculate and unnormalize steller parameter predictions
-            normalized_prediction = self.model(normalized_spectra)
+            normalized_prediction = self.model(normalized_spectra.to(self.device))
             prediction = unnormalize_predictions(normalized_prediction)
             prediction = prediction.squeeze()
 
@@ -343,11 +379,13 @@ class Pipeline():
             log_G = prediction[0].item()
             log_Teff = prediction[1].item()
             FeH = prediction[2].item()
+            rv = prediction[3].item()
 
             preds = PredictionOutput(
                 log_G=log_G,
                 log_Teff=log_Teff,
                 FeH=FeH,
+                rv=rv,
             )
 
             uncertainty_preds = None
@@ -360,7 +398,7 @@ class Pipeline():
                 normalized_uncertainties_batch = log_scale_flux(interp_uncertainties_batch).float()
 
                 # Calculate and unnormalize stellar parameters predictions
-                normalized_predictions_batch = self.model(normalized_uncertainties_batch)
+                normalized_predictions_batch = self.model(normalized_uncertainties_batch.to(self.device))
                 prediction = unnormalize_predictions(normalized_predictions_batch)
 
                 # Calculate the median and std for each stellar parameter
@@ -370,20 +408,24 @@ class Pipeline():
                 # Unpack medians
                 log_G_median = median[0].item()
                 log_Teff_median = median[1].item()
-                log_Feh_median = median[2].item()
+                Feh_median = median[2].item()
+                rv_median = median[3].item()
 
                 # Unpack stds
                 log_G_std = std[0].item()
                 log_Teff_std = std[1].item()
-                log_Feh_std = std[2].item()
+                Feh_std = std[2].item()
+                rv_std = std[3].item()
             
                 uncertainty_preds = UncertaintyOutput(
                     log_G_median=log_G_median,
                     log_Teff_median=log_Teff_median,
-                    log_Feh_median=log_Feh_median,
+                    Feh_median=Feh_median,
+                    rv_median=rv_median,
                     log_G_std=log_G_std,
                     log_Teff_std=log_Teff_std,
-                    log_Feh_std=log_Feh_std
+                    Feh_std=Feh_std,
+                    rv_std=rv_std
                 )
 
             yield preds, uncertainty_preds
@@ -394,11 +436,11 @@ class Pipeline():
         """
         if self.calculate_uncertainties:
             self.output_file.write((
-                "path,logg,logTeff,FeH,"
-                "logg_median,logTeff_median,FeH_median,"
-                "logg_std,logTeff_std,FeH_std\n"))
+                "path,logg,logTeff,FeH,rv,"
+                "logg_median,logTeff_median,FeH_median,rv_median,"
+                "logg_std,logTeff_std,FeH_std,rv_std\n"))
         else:
-            self.output_file.write("path,logg,logTeff,FeH\n")
+            self.output_file.write("path,logg,logTeff,FeH,rv\n")
     
     def _write_prediction(
         self, file_path: str, preds: PredictionOutput, uncertainty_preds: UncertaintyOutput
@@ -408,11 +450,11 @@ class Pipeline():
 
         Args:
         - file_path (str): The path of the input file.
-        - preds (Tuple[float, float, float]): A tuple of predicted values,
-        containing the predicted logg, logteff, and feh values, in that order.
-        - uncertainty_preds (Optional[Tuple[float, float, float, float, float, float]]): A tuple of
+        - preds (Tuple[float, float, float, float]): A tuple of predicted values,
+        containing the predicted logg, logteff, feh, and rv values, in that order.
+        - uncertainty_preds (Optional[Tuple[float, float, float, float, float, float, float, float]]): A tuple of
         predicted uncertainties for the input file, containing the median values and standard
-        deviations of the predicted logg, logteff, and feh values, in that order. This argument is
+        deviations of the predicted logg, logteff, feh, and rv values, in that order. This argument is
         optional, and if it is not provided, the method will not output the uncertainty predictions
         to the output file.
 
@@ -423,11 +465,11 @@ class Pipeline():
         - This method writes a line to the output file, with comma-separated values for the input file
         path, predicted logg, logteff, and feh values. If the `uncertainty_preds` argument is provided,
         this line will also include the median values and standard deviations of the predicted
-        logg, logteff, and feh values, in that order, separated by commas.
+        logg, logteff, feh, and rv values, in that order, separated by commas.
         """
-        logg, logteff, feh = preds
+        logg, logteff, feh, rv = preds
         if self.calculate_uncertainties:
-            logg_median, logteff_median, feh_median, logg_std, logteff_std, feh_std = uncertainty_preds
-            self.output_file.write((f"{file_path},{logg},{logteff},{feh},{logg_median},{logteff_median},{feh_median},{logg_std},{logteff_std},{feh_std}\n"))
+            logg_median, logteff_median, feh_median, rv_median, logg_std, logteff_std, feh_std, rv_std = uncertainty_preds
+            self.output_file.write((f"{file_path},{logg},{logteff},{feh},{rv},{logg_median},{logteff_median},{feh_median},{rv_median},{logg_std},{logteff_std},{feh_std},{rv_std}\n"))
         else:
-            self.output_file.write(f"{file_path},{logg},{logteff},{feh}\n")
+            self.output_file.write(f"{file_path},{logg},{logteff},{feh},{rv}\n")

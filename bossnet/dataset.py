@@ -38,7 +38,8 @@ class DataSource(str, Enum):
 
     Enumeration members:
     - BOSS: represents the data source as BOSS (Baryon Oscillation Spectroscopic Survey).
-    - LAMOST: represents the data source as LAMOST (Large Sky Area Multi-Object Fiber Spectroscopic Telescope).
+    - LAMOSTDR7: represents the data source as LAMOST (Large Sky Area Multi-Object Fiber Spectroscopic Telescope).
+    - LAMOSTDR8: represents the data source as LAMOST (Large Sky Area Multi-Object Fiber Spectroscopic Telescope).
     """
     BOSS="boss"
     LAMOSTDR7="lamost_dr7"
@@ -222,15 +223,3 @@ class BOSSDataset(torch.utils.data.Dataset):
         - length: int, The number of FITS files in the dataset.
         """
         return len(self.flux_paths)
-
-# TODO: Write appogee dataset class.
-# TODO: Write get_dataset function.
-class APOGEEDataset(torch.utils.data.Dataset):
-    def __init__(self):
-        ...
-    
-    def __getitem__(self, i):
-        ...
-    
-    def __len__(self):
-        ...

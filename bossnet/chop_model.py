@@ -1,5 +1,4 @@
 """
-The dataset used for the BOSS Net model.
 This file includes a utility for chunking a model.
 
 MIT License
