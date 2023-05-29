@@ -15,7 +15,7 @@ python bossnet path_to_spectra_files -d data_source -o output_file -u num_uncert
 For example:
 
 ```bash
-python main.py 'spectra' -d 'boss' -o 'predictions.txt' -u 100 -v
+python bossnet 'spectra' -d 'boss' -o 'predictions.txt' -u 100 -v
 ```
 
 Here's what each argument does:
