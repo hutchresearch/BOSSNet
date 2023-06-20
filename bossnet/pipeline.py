@@ -23,7 +23,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-
 import os
 import io
 import sys
@@ -72,43 +71,35 @@ class StellarParameters:
     LOGTEFF: DataStats
     LOGG: DataStats
     FEH: DataStats
-    RV: DataStats
 
 # Unnormalization values for the stellar parameters.
 stellar_parameter_stats = StellarParameters(
-    LOGTEFF=DataStats(
-        MEAN=3.8,
-        PNMAX=12.000000000000002,
-        PNMIN=-6.324908332532,
-        STD=0.1,
+    FEH=DataStats(
+        MEAN=-0.2,
+        PNMAX=4.568167,
+        PNMIN=-8.926531221275827,
+        STD=0.3,
     ),
     LOGG=DataStats(
-        MEAN=3.9,
-        PNMAX=6.584444444444444,
-        PNMIN=-4.403565883333333,
-        STD=0.9,
+        MEAN=3.2,
+        PNMAX=3.3389749999999996,
+        PNMIN=-3.2758333384990697,
+        STD=1.2,
     ),
-    FEH=DataStats(
-        MEAN=-0.4,
-        PNMAX=4.4496842,
-        PNMIN=-7.496200000000001,
-        STD=0.5,
-    ),
-    RV=DataStats(
-        MEAN=-7.4,
-        PNMAX=9.074319773706897,
-        PNMIN=-9.116415791127874,
-        STD=60.9
+    LOGTEFF=DataStats(
+        MEAN=3.7,
+        PNMAX=9.387230328989702,
+        PNMIN=-5.2989908487604165,
+        STD=0.1,
     ),
 )
-
 # Data structure for the output of the model.
-PredictionOutput = namedtuple('PredictionOutput', ['log_G', 'log_Teff', 'FeH', 'rv'])
+PredictionOutput = namedtuple('PredictionOutput', ['log_G', 'log_Teff', 'FeH'])
 
 # Data structure for uncertainty predictions.
 UncertaintyOutput = namedtuple('UncertaintyOutput', [
-    'log_G_median', 'log_Teff_median', 'Feh_median', 'rv_median',
-    'log_G_std', 'log_Teff_std', 'Feh_std', 'rv_std'
+    'log_G_median', 'log_Teff_median', 'Feh_median', 
+    'log_G_std', 'log_Teff_std', 'Feh_std', 
 ])
 
 def unnormalize(X: torch.Tensor, mean: float, std: float) -> torch.Tensor:
@@ -144,7 +135,6 @@ def unnormalize_predictions(predictions: torch.Tensor) -> torch.Tensor:
     predictions[:, 0] = unnormalize(predictions[:, 0], stellar_parameter_stats.LOGG.MEAN, stellar_parameter_stats.LOGG.STD)
     predictions[:, 1] = unnormalize(predictions[:, 1], stellar_parameter_stats.LOGTEFF.MEAN, stellar_parameter_stats.LOGTEFF.STD)
     predictions[:, 2] = unnormalize(predictions[:, 2], stellar_parameter_stats.FEH.MEAN, stellar_parameter_stats.FEH.STD)
-    predictions[:, 3] = unnormalize(predictions[:, 3], stellar_parameter_stats.RV.MEAN, stellar_parameter_stats.RV.STD)
 
     return predictions
 
@@ -280,9 +270,9 @@ class Pipeline():
     - _write_prediction(file_path: str, preds: PredictionOutput, uncertainty_preds: UncertaintyOutput): Writes the predictions for a given input to the output file.
     """
     def __init__(
-        self, 
+        self,
         spectra_paths: str,
-        data_source: str = "boss",
+        data_source: str = "apogee",
         output_file: Optional[str] = None,
         num_uncertainty_draws: Optional[int] = 0,
         verbose: bool = False
@@ -301,18 +291,13 @@ class Pipeline():
         self.num_uncertainty_draws: int = num_uncertainty_draws
         self.calculate_uncertainties: bool = num_uncertainty_draws > 0
         
-        # Create standard grid for interpolation.
-        MIN_WL, MAX_WL, FLUX_LEN = 3800, 8900, 3900
-        linear_grid = torch.linspace(MIN_WL, MAX_WL, steps=FLUX_LEN)
-        self.interpolate_flux = partial(interpolate_flux, linear_grid=linear_grid)
-    
     def _load_model(self):
         """
         Loads the BossNet model from disk.
         """
         model_path = os.path.join(os.path.split(os.path.abspath(__file__))[0], "deconstructed_model")
         state_dict = franken_load(model_path, 10)
-        self.model.load_state_dict(state_dict, strict=True)
+        self.model.load_state_dict(state_dict, strict=False)
         self.model.to(self.device)
         self.model.eval()
     
@@ -359,16 +344,10 @@ class Pipeline():
         loader = iter(tqdm(loader, desc="Evaluating Model: ", file=sys.stderr) if self.verbose else loader)
         while loader:
 
-            try:
-                spectra, error, wavlen = next(loader)
-            except (OSError, TypeError):
-                if self.verbose:
-                    print(f"Missing, empty, or corrupt FITS file. ({path})", file=sys.stderr)
-                    yield None, None
+            spectra, error, wavlen = next(loader)
 
             # Interpolate and log scale spectra
-            interp_spectra = self.interpolate_flux(spectra, wavlen)
-            normalized_spectra = log_scale_flux(interp_spectra).float()
+            normalized_spectra = log_scale_flux(spectra).float()
 
             # Calculate and unnormalize steller parameter predictions
             normalized_prediction = self.model(normalized_spectra.to(self.device))
@@ -379,13 +358,11 @@ class Pipeline():
             log_G = prediction[0].item()
             log_Teff = prediction[1].item()
             FeH = prediction[2].item()
-            rv = prediction[3].item()
 
             preds = PredictionOutput(
                 log_G=log_G,
                 log_Teff=log_Teff,
                 FeH=FeH,
-                rv=rv,
             )
 
             uncertainty_preds = None
@@ -394,8 +371,7 @@ class Pipeline():
                 uncertainties_batch = create_uncertainties_batch(spectra, error, self.num_uncertainty_draws)
 
                 # Interpolate and log scale sprectra
-                interp_uncertainties_batch = self.interpolate_flux(uncertainties_batch, wavlen)
-                normalized_uncertainties_batch = log_scale_flux(interp_uncertainties_batch).float()
+                normalized_uncertainties_batch = log_scale_flux(uncertainties_batch).float()
 
                 # Calculate and unnormalize stellar parameters predictions
                 normalized_predictions_batch = self.model(normalized_uncertainties_batch.to(self.device))
@@ -409,23 +385,19 @@ class Pipeline():
                 log_G_median = median[0].item()
                 log_Teff_median = median[1].item()
                 Feh_median = median[2].item()
-                rv_median = median[3].item()
 
                 # Unpack stds
                 log_G_std = std[0].item()
                 log_Teff_std = std[1].item()
                 Feh_std = std[2].item()
-                rv_std = std[3].item()
             
                 uncertainty_preds = UncertaintyOutput(
                     log_G_median=log_G_median,
                     log_Teff_median=log_Teff_median,
                     Feh_median=Feh_median,
-                    rv_median=rv_median,
                     log_G_std=log_G_std,
                     log_Teff_std=log_Teff_std,
                     Feh_std=Feh_std,
-                    rv_std=rv_std
                 )
 
             yield preds, uncertainty_preds
@@ -467,9 +439,9 @@ class Pipeline():
         this line will also include the median values and standard deviations of the predicted
         logg, logteff, feh, and rv values, in that order, separated by commas.
         """
-        logg, logteff, feh, rv = preds
+        logg, logteff, feh = preds
         if self.calculate_uncertainties:
-            logg_median, logteff_median, feh_median, rv_median, logg_std, logteff_std, feh_std, rv_std = uncertainty_preds
-            self.output_file.write((f"{file_path},{logg},{logteff},{feh},{rv},{logg_median},{logteff_median},{feh_median},{rv_median},{logg_std},{logteff_std},{feh_std},{rv_std}\n"))
+            logg_median, logteff_median, feh_median, logg_std, logteff_std, feh_std = uncertainty_preds
+            self.output_file.write((f"{file_path},{logg},{logteff},{feh},{logg_median},{logteff_median},{feh_median},{logg_std},{logteff_std},{feh_std},\n"))
         else:
-            self.output_file.write(f"{file_path},{logg},{logteff},{feh},{rv}\n")
+            self.output_file.write(f"{file_path},{logg},{logteff},{feh}\n")

@@ -12,8 +12,8 @@ def parse_args():
     parser.add_argument("spectra_paths", type=str,
                         help="Path to plain text file containing paths to spectra used for predictions.")
 
-    parser.add_argument("-d", "--data_source", choices=["boss", "lamost_dr7", "lamost_dr8"], default="boss", 
-                        help="source of data. Default is boss. Options: [boss, lamost_dr7, lamost_dr8]")
+    parser.add_argument("-d", "--data_source", choices=["boss", "lamost_dr7", "lamost_dr8", "apogee"], default="boss", 
+                        help="source of data. Default is boss. Options: [boss, lamost_dr7, lamost_dr8, apogee]")
     
     parser.add_argument("-o", "--output_file", type=str, default=None,
                         help="Path to the file where the predictions will be saved. Default is None")
@@ -32,10 +32,10 @@ def main() -> None:
     """
     args = parse_args()
     pipeline = Pipeline(
-        spectra_paths=args.spectra_paths, 
-        data_source=args.data_source, 
+        spectra_paths=args.spectra_paths,
+        data_source=args.data_source,
         output_file=args.output_file,
-        num_uncertainty_draws=args.num_uncertainty_draws, 
+        num_uncertainty_draws=args.num_uncertainty_draws,
         verbose=args.verbose
     ).predict()
 

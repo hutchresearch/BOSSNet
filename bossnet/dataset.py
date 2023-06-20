@@ -42,6 +42,7 @@ class DataSource(str, Enum):
     - LAMOSTDR8: represents the data source as LAMOST (Large Sky Area Multi-Object Fiber Spectroscopic Telescope).
     """
     BOSS="boss"
+    APOGEE="apogee"
     LAMOSTDR7="lamost_dr7"
     LAMOSTDR8="lamost_dr8"
 
@@ -144,6 +145,16 @@ def open_boss_fits(file_path: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Te
 
     return flux, error, wavlen
 
+def open_apogee_fits(file_path: str) -> Tuple[str, np.array, np.array, np.array]:
+    with fits.open(file_path) as hdul:
+        flux = hdul[1].data.astype(np.float32)[-1]
+        error = hdul[2].data.astype(np.float32)[-1]
+        wavlen = np.zeros_like(flux)
+    flux = torch.from_numpy(flux).float()
+    error = torch.from_numpy(error).float()
+
+    return flux, error, wavlen
+
 def get_fits_function(data_source: DataSource) -> Callable:
     """ 
     The function get_fits_function returns the appropriate function for opening a FITS file based on 
@@ -157,6 +168,8 @@ def get_fits_function(data_source: DataSource) -> Callable:
     """
     if data_source == DataSource.BOSS:
         return open_boss_fits
+    if data_source == DataSource.APOGEE:
+        return open_apogee_fits
     if data_source == DataSource.LAMOSTDR7:
         return open_lamost_fitsDR7
     if data_source == DataSource.LAMOSTDR8:

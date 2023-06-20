@@ -110,7 +110,7 @@ class BossNet(torch.nn.Module):
             LinearBlock(1024, 1024),
             LinearBlock(1024, 1024),
             LinearBlock(1024, 1024),
-            torch.nn.Linear(1024, 4),
+            torch.nn.Linear(1024, 3),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -136,4 +136,3 @@ class BossNet(torch.nn.Module):
         linear_input = out.view(-1, 64 * 1024)
         linear_output = self.linear_sequential(linear_input)
         return linear_output
-

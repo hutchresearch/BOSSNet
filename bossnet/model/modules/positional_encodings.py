@@ -62,6 +62,7 @@ class PositionalEncoding1D(torch.nn.Module):
         self.register_buffer("inv_freq", inv_freq)
         self.cached_penc = None
 
+
     def forward(self, tensor: torch.Tensor) -> torch.Tensor:
         """
         Apply 1D positional encoding to a 3D tensor.
