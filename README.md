@@ -21,7 +21,7 @@ python bossnet 'spectra' -d 'boss' -o 'predictions.txt' -u 100 -v
 Here's what each argument does:
 
 - `path_to_spectra_files`: The path to your spectra files
-- `-d`, `--data_source`: The source of data. Default is 'boss'. Options: ['boss', 'lamost_dr7', 'lamost_dr8']
+- `-d`, `--data_source`: The source of data. Default is 'boss'. Options: ['boss', 'lamost_dr7', 'lamost_dr8', 'apogee']
 - `-o`, `--output_file`: The path to the file where the predictions will be saved. If not provided, the output will be printed to the console
 - `-u`, `--num_uncertainty_draws`: The number of realizations to sample from the predictive distribution to calculate uncertainties. Default is 0
 - `-v`, `--verbose`: If provided, the progress messages will be printed to the console

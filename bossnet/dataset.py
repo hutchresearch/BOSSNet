@@ -147,8 +147,9 @@ def open_boss_fits(file_path: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Te
 
 def open_apogee_fits(file_path: str) -> Tuple[str, np.array, np.array, np.array]:
     with fits.open(file_path) as hdul:
-        flux = hdul[1].data.astype(np.float32)[-1]
-        error = hdul[2].data.astype(np.float32)[-1]
+        # We use the first index to specify that we are using the coadded spectrum
+        flux = hdul[1].data.astype(np.float32)[0]
+        error = hdul[2].data.astype(np.float32)[0]
         wavlen = np.zeros_like(flux)
     flux = torch.from_numpy(flux).float()
     error = torch.from_numpy(error).float()
