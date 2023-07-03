@@ -226,6 +226,8 @@ class BOSSDataset(torch.utils.data.Dataset):
         """
         fits_file_path = self.flux_paths[index]
         flux, error, wavlen = self.open_fits(fits_file_path)
+        flux = np.nan_to_num(flux, nan=0.0)
+        flux = torch.from_numpy(flux)
         flux = flux[None, :]
         return flux, error, wavlen
   

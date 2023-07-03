@@ -193,33 +193,6 @@ def create_uncertainties_batch(flux: torch.Tensor, error: torch.Tensor, num_unce
     normal_sample = torch.randn((num_uncertainty_draws, *error.shape[-2:]))
     return flux + error * normal_sample
 
-def interpolate_flux(
-    flux_batch: torch.Tensor, wavelen: torch.Tensor, linear_grid: torch.Tensor
-) -> torch.Tensor:
-    """
-    The function interpolate_flux takes in the flux, wavelength, and linear grid of a spectrum,
-    interpolates the flux onto a new linear wavelength grid, and returns the interpolated flux as
-    a torch.Tensor.
-
-    Args:
-    - flux_batch: torch.Tensor, A torch.Tensor representing the flux values of the spectrum.
-    - wavelen: torch.Tensor, A torch.Tensor representing the wavelength values of the spectrum.
-    - linear_grid: torch.Tensor, A torch.Tensor representing the new linear wavelength grid to
-      interpolate the flux onto.
-
-    Returns:
-    - interpolated_flux: torch.Tensor, A torch.Tensor representing the interpolated flux values
-      of the spectrum on the new linear wavelength grid.
-    """
-    interpolated_flux = torch.zeros(*flux_batch.shape[:-1], len(linear_grid))
-    for i, flux in enumerate(flux_batch):
-        _wavelen = wavelen[~torch.isnan(flux)]
-        _flux = flux[~torch.isnan(flux)]
-        _flux = np.interp(linear_grid, _wavelen, _flux)
-        _flux = torch.from_numpy(_flux)
-        interpolated_flux[i] = _flux
-    return interpolated_flux
-
 def log_scale_flux(flux: torch.Tensor) -> torch.Tensor:
     """
     The function log_scale_flux applies a logarithmic scaling to the input flux tensor and clips the values
@@ -260,7 +233,6 @@ class Pipeline():
     - output_file (TextIO): The file to which predictions will be written.
     - num_uncertainty_draws (int): The number of draws for uncertainty calculation.
     - calculate_uncertainties (bool): A flag that indicates whether or not to calculate uncertainties.
-    - interpolate_flux (Callable): A function to interpolate the flux.
 
     Methods:
     - _load_model(): Loads the BossNet model from disk.
@@ -346,7 +318,7 @@ class Pipeline():
 
             spectra, error, wavlen = next(loader)
 
-            # Interpolate and log scale spectra
+            # log scale spectra
             normalized_spectra = log_scale_flux(spectra).float()
 
             # Calculate and unnormalize steller parameter predictions
@@ -370,7 +342,7 @@ class Pipeline():
                 # Get batch of noised spectra
                 uncertainties_batch = create_uncertainties_batch(spectra, error, self.num_uncertainty_draws)
 
-                # Interpolate and log scale sprectra
+                # scale sprectra
                 normalized_uncertainties_batch = log_scale_flux(uncertainties_batch).float()
 
                 # Calculate and unnormalize stellar parameters predictions
