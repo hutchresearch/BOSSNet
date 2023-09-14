@@ -363,7 +363,7 @@ class Pipeline():
                 spectra, error, wavlen = next(loader)
             except (OSError, TypeError):
                 if self.verbose:
-                    print(f"Missing, empty, or corrupt FITS file. ({path})", file=sys.stderr)
+                    print(f"Missing, empty, or corrupt FITS file.", file=sys.stderr)
                     yield None, None
 
             # Interpolate and log scale spectra
