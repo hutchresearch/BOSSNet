@@ -312,7 +312,7 @@ class Pipeline():
         """
         model_path = os.path.join(os.path.split(os.path.abspath(__file__))[0], "deconstructed_model")
         state_dict = franken_load(model_path, 10)
-        self.model.load_state_dict(state_dict, strict=True)
+        self.model.load_state_dict(state_dict, strict=False)
         self.model.to(self.device)
         self.model.eval()
     
