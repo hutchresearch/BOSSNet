@@ -1,4 +1,5 @@
 # BOSSNet
+[![DOI](https://zenodo.org/badge/610963244.svg)](https://zenodo.org/doi/10.5281/zenodo.10453134)
 
 BossNet is a powerful and efficient pipeline for predicting stellar parameters (effective temperature, surface gravity, metallicity, and radial velocity).
 
