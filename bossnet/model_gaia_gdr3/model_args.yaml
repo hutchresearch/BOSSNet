@@ -1,0 +1,10 @@
+
+in_channels: 1
+model_dim: 8
+dim_mults: [1, 1, 1, 1]
+kernel_size: 30
+num_targets: 3
+adapt_pool_output_dim: 1024
+num_linear: 5
+linear_dim: 1024
+pos_enc: True

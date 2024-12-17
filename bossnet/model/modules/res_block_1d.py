@@ -61,7 +61,6 @@ class ResNetBlock1D(torch.nn.Module):
         out_channels: int, 
         kernel_size: int, 
         padding: int, 
-        metadata_emb_dim: int,
     ) -> None:
         super(ResNetBlock1D, self).__init__()
         self.in_channels = in_channels
