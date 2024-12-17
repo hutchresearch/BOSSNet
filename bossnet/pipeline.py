@@ -1,9 +1,9 @@
 """
-The pipeline used for the BOSS Net model.
+The pipeline used for the BOSS Net, APOGEE Net, and GAIA Net models.
 This file includes the Pipeline object and any relevant resources.
 
 MIT License
-Copyright (c) 2023 hutchresearch
+Copyright (c) 2024 hutchresearch
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -28,88 +28,78 @@ import os
 import io
 import sys
 import torch
-from tqdm import tqdm
-from bossnet.dataset import BOSSDataset
-from bossnet.model import BossNet
-from typing import Optional
-from dataclasses import dataclass
-import tempfile
-from collections import OrderedDict, namedtuple
 import numpy as np
-from functools import partial
+from typing import Optional, List, Tuple
+import tempfile
+from collections import OrderedDict
+from abc import ABC, abstractmethod
+from dataset import BOSSDataset, GAIAGDR3Dataset, GAIAXpDataset, boss_collate
+from model.boss_net import BossNet
+from utils import open_yaml, Stats
+from tqdm import tqdm
 
-@dataclass(frozen=True)
-class DataStats:
+
+def log_scale_flux(flux: torch.Tensor) -> torch.Tensor:
     """
-    A dataclass that holds stellar parameter statistics related to a single value.
+    The function log_scale_flux applies a logarithmic scaling to the input flux tensor and clips the values
+    to remove outliers.
 
-    Attributes:
-    - MEAN: float, the mean value of the value.
-    - STD: float, the standard deviation of the value.
-    - PNMAX: float, the post-normalization maximum value of the value.
-    - PNMIN: float, the post-normalization minimum value of the value.
+    Args:
+    - flux: torch.Tensor, A torch.Tensor representing the flux values of the data.
+
+    Returns:
+    - flux: torch.Tensor, A torch.Tensor representing the logarithmically scaled flux values of the data.
+      The values are clipped at the 95th percentile plus one to remove outliers.
     """
-    MEAN: float
-    STD: float
-    PNMAX: float
-    PNMIN: float
+    s = 0.000001
+    flux = torch.clip(flux, min=s, max=None)
+    flux = torch.log(flux)
+    perc_95 = torch.quantile(flux, 0.95)
+    flux = torch.clip(flux, min=None, max=perc_95 + 1)
+    return flux
 
-@dataclass(frozen=True)
-class StellarParameters:
+def log_scale_flux_batch(flux_bath: torch.Tensor) -> torch.Tensor:
+    """log_scale_flux applies a logarithmic scaling to the input flux tensor and clips the values
+    to remove outliers for each element in a batch.
+
+    Args:
+    - flux_batch: torch.Tensor, A torch.Tensor representing a batch of flux data.
+
+    Returns:
+    - log_flux_batch: torch.Tensor, A torch.Tensor representing the logarithmically scaled flux values of the data
+      in the batch. The values are clipped at the 95th percentile plus one to remove outliers.
     """
-    The StellarParameters class is a dataclass that represents the statistical properties of 
-    three stellar parameters: effective temperature (LOGTEFF), surface gravity (LOGG), and 
-    metallicity (FEH). The class contains three attributes, each of which is an instance of 
-    the DataStats class, representing the mean, standard deviation, post-normalization minimum, 
-    and post-normalization maximum values of each parameter.
+    log_flux_batch = torch.zeros_like(flux_bath)
+    for i, flux in enumerate(flux_bath):
+        log_flux_batch[i] = log_scale_flux(flux)
+    return log_flux_batch
 
-    Attributes:
-    - LOGTEFF: DataStats, representing the statistical properties of the effective temperature.
-    - LOGG: DataStats, representing the statistical properties of the surface gravity.
-    - FEH: DataStats, representing the statistical properties of the metallicity.
-    - RV: DataStats, representing the statistical properties of the radial velocity.
+def interpolate_flux(
+    flux_batch: torch.Tensor, wavelen: torch.Tensor,linear_grid: torch.Tensor) -> torch.Tensor:
     """
-    LOGTEFF: DataStats
-    LOGG: DataStats
-    FEH: DataStats
-    RV: DataStats
+    The function interpolate_flux takes in the flux, wavelength, and linear grid of a spectrum,
+    interpolates the flux onto a new linear wavelength grid, and returns the interpolated flux as
+    a torch.Tensor.
 
-# Unnormalization values for the stellar parameters.
-stellar_parameter_stats = StellarParameters(
-    LOGTEFF=DataStats(
-        MEAN=3.8,
-        PNMAX=12.000000000000002,
-        PNMIN=-6.324908332532,
-        STD=0.1,
-    ),
-    LOGG=DataStats(
-        MEAN=3.9,
-        PNMAX=6.584444444444444,
-        PNMIN=-4.403565883333333,
-        STD=0.9,
-    ),
-    FEH=DataStats(
-        MEAN=-0.4,
-        PNMAX=4.4496842,
-        PNMIN=-7.496200000000001,
-        STD=0.5,
-    ),
-    RV=DataStats(
-        MEAN=-7.4,
-        PNMAX=9.074319773706897,
-        PNMIN=-9.116415791127874,
-        STD=60.9
-    ),
-)
+    Args:
+    - flux_batch: torch.Tensor, A torch.Tensor representing the flux values of the spectrum.
+    - wavelen: torch.Tensor, A torch.Tensor representing the wavelength values of the spectrum.
+    - linear_grid: torch.Tensor, A torch.Tensor representing the new linear wavelength grid to
+      interpolate the flux onto.
 
-# Data structure for the output of the model.
-PredictionOutput = namedtuple('PredictionOutput', ['log_G', 'log_Teff', 'FeH', 'rv'])
-
-# Data structure for uncertainty predictions.
-UncertaintyOutput = namedtuple('UncertaintyOutput', [
-    'log_G_median', 'log_Teff_median', 'Feh_median', 'rv_median',
-    'log_G_std', 'log_Teff_std', 'Feh_std', 'rv_std'
-])
+    Returns:
+    - interpolated_flux: torch.Tensor, A torch.Tensor representing the interpolated flux values
+      of the spectrum on the new linear wavelength grid.
+    """
+    
+    interpolated_flux = torch.zeros(*flux_batch.shape[:-1], len(linear_grid))
+    for i, flux in enumerate(flux_batch):
+        _wavelen = wavelen[i][~torch.isnan(flux)]
+        _flux = flux[~torch.isnan(flux)]
+        _flux = np.interp(linear_grid, _wavelen, _flux)
+        _flux = torch.from_numpy(_flux)
+        interpolated_flux[i] = _flux
+    return interpolated_flux
 
 def unnormalize(X: torch.Tensor, mean: float, std: float) -> torch.Tensor:
     """
@@ -125,7 +115,7 @@ def unnormalize(X: torch.Tensor, mean: float, std: float) -> torch.Tensor:
     """
     return X * std + mean
 
-def unnormalize_predictions(predictions: torch.Tensor) -> torch.Tensor:
+def unnormalize_predictions(predictions: torch.Tensor, param_names: List[str], stats: Stats) -> torch.Tensor:
     """
     The unnormalize_predictions function takes a tensor X of shape (batch_size, 3) and unnormalizes 
     each of its three columns using the mean and standard deviation of the corresponding DataStats 
@@ -141,11 +131,9 @@ def unnormalize_predictions(predictions: torch.Tensor) -> torch.Tensor:
     - torch.Tensor: Output tensor of shape (batch_size, 4) where each column has been unnormalized using 
       the mean and standard deviation stored in stellar_parameter_stats.
     """
-    predictions[:, 0] = unnormalize(predictions[:, 0], stellar_parameter_stats.LOGG.MEAN, stellar_parameter_stats.LOGG.STD)
-    predictions[:, 1] = unnormalize(predictions[:, 1], stellar_parameter_stats.LOGTEFF.MEAN, stellar_parameter_stats.LOGTEFF.STD)
-    predictions[:, 2] = unnormalize(predictions[:, 2], stellar_parameter_stats.FEH.MEAN, stellar_parameter_stats.FEH.STD)
-    predictions[:, 3] = unnormalize(predictions[:, 3], stellar_parameter_stats.RV.MEAN, stellar_parameter_stats.RV.STD)
-
+    for i, param_name in enumerate(param_names):
+        param_stat = getattr(stats, param_name)
+        predictions[:, i] = unnormalize(predictions[:, i], param_stat.MEAN, param_stat.STD)
     return predictions
 
 def franken_load(load_path: str, chunks: int) -> OrderedDict:
@@ -187,289 +175,287 @@ def franken_load(load_path: str, chunks: int) -> OrderedDict:
 
     return state_dict
 
-def create_uncertainties_batch(flux: torch.Tensor, error: torch.Tensor, num_uncertainty_draws: int) -> torch.Tensor:
+def create_uncertainties_batch(flux_batch: torch.Tensor, error_batch: torch.Tensor) -> torch.Tensor:
     """
     Creates a batch of flux tensors with added noise from the specified error tensors.
 
     Args:
     - flux: torch.Tensor, A torch.Tensor representing the flux values of the data.
     - error: torch.Tensor, A torch.Tensor representing the error values of the data.
-    - num_uncertainty_draws: int, The number of times to draw noise samples to create a batch of flux tensors.
 
     Returns:
     - flux_with_noise: torch.Tensor, A torch.Tensor representing the batch of flux tensors with added noise from the 
       specified error tensors.
     """
-    normal_sample = torch.randn((num_uncertainty_draws, *error.shape[-2:]))
-    return flux + error * normal_sample
+    normal_sample = torch.randn_like(flux_batch)
+    normal_sample[flux_batch.isnan()] = torch.nan
+    return flux_batch + error_batch * normal_sample
 
-def interpolate_flux(
-    flux_batch: torch.Tensor, wavelen: torch.Tensor, linear_grid: torch.Tensor
-) -> torch.Tensor:
-    """
-    The function interpolate_flux takes in the flux, wavelength, and linear grid of a spectrum,
-    interpolates the flux onto a new linear wavelength grid, and returns the interpolated flux as
-    a torch.Tensor.
 
-    Args:
-    - flux_batch: torch.Tensor, A torch.Tensor representing the flux values of the spectrum.
-    - wavelen: torch.Tensor, A torch.Tensor representing the wavelength values of the spectrum.
-    - linear_grid: torch.Tensor, A torch.Tensor representing the new linear wavelength grid to
-      interpolate the flux onto.
-
-    Returns:
-    - interpolated_flux: torch.Tensor, A torch.Tensor representing the interpolated flux values
-      of the spectrum on the new linear wavelength grid.
-    """
-    interpolated_flux = torch.zeros(*flux_batch.shape[:-1], len(linear_grid))
-    for i, flux in enumerate(flux_batch):
-        _wavelen = wavelen[~torch.isnan(flux)]
-        _flux = flux[~torch.isnan(flux)]
-        _flux = np.interp(linear_grid, _wavelen, _flux)
-        _flux = torch.from_numpy(_flux)
-        interpolated_flux[i] = _flux
-    return interpolated_flux
-
-def log_scale_flux(flux: torch.Tensor) -> torch.Tensor:
-    """
-    The function log_scale_flux applies a logarithmic scaling to the input flux tensor and clips the values
-    to remove outliers.
-
-    Args:
-    - flux: torch.Tensor, A torch.Tensor representing the flux values of the data.
-
-    Returns:
-    - flux: torch.Tensor, A torch.Tensor representing the logarithmically scaled flux values of the data.
-    The values are clipped at the 95th percentile plus one to remove outliers.
-    """
-    s = 0.000001
-    flux = torch.clip(flux, min=s, max=None)
-    flux = torch.log(flux)
-    perc_95 = torch.quantile(flux, 0.95)
-    flux = torch.clip(flux, min=None, max=perc_95 + 1)
-    return flux
-
-class Pipeline():
-    """
-    This class defines the pipeline for running predictions using the BossNet model.
-
-    Args:
-    - spectra_paths (str): The paths to the input spectra files.
-    - data_source (str, optional): The source of the data, default is "boss".
-    - output_file (str, optional): The file to which predictions will be written. If no output file is specified, 
-      then predictions will be written to standard out.
-    - num_uncertainty_draws (int, optional): The number of draws for uncertainty calculation, default is 0. If greater 
-      than 0, then uncertainties will be calculated.
-    - verbose (bool, optional): If set to True, verbose output will be enabled, default is False.
-
-    Attributes:
-    - verbose (bool): Verbose output flag.
-    - device (torch.device): The device to which tensors will be sent.
-    - dataset (BOSSDataset): The BOSS dataset.
-    - model (torch.nn.Module): The BossNet model.
-    - output_file (TextIO): The file to which predictions will be written.
-    - num_uncertainty_draws (int): The number of draws for uncertainty calculation.
-    - calculate_uncertainties (bool): A flag that indicates whether or not to calculate uncertainties.
-    - interpolate_flux (Callable): A function to interpolate the flux.
-
-    Methods:
-    - _load_model(): Loads the BossNet model from disk.
-    - predict(): Runs the pipeline to generate predictions.
-    - _make_prediction(loader: torch.utils.data.DataLoader): Makes predictions for the given data loader.
-    - _write_header(): Writes the header of the output file.
-    - _write_prediction(file_path: str, preds: PredictionOutput, uncertainty_preds: UncertaintyOutput): Writes the predictions for a given input to the output file.
-    """
+class Pipeline(ABC):
     def __init__(
         self, 
-        spectra_paths: str,
-        data_source: str = "boss",
+        deconstructed_model_dir: str,
+        dataset: torch.utils.data.Dataset,
+        param_list: List[str],
+        stats: Stats,
         output_file: Optional[str] = None,
         num_uncertainty_draws: Optional[int] = 0,
-        verbose: bool = False
+        collate_fn: Optional[callable] = None,
+        verbose: bool = False,
     ) -> None:
+        """
+        Initializes the Pipeline object with the specified parameters, including loading the model and 
+        setting up the dataset, output file, and other settings.
+
+        Args:
+        - deconstructed_model_dir: str, Directory path for the deconstructed model.
+        - dataset: torch.utils.data.Dataset), The dataset used for predictions.
+        - param_list: List[str], List of parameter names to include in predictions.
+        - stats: Stats, Statistical information for unnormalizing the data.
+        - output_file: Optional[str], Path to the output file for predictions (defaults to standard output).
+        - num_uncertainty_draws: Optional[int], Number of draws for uncertainty calculations (default is 0, no uncertainty).
+        - collate_fn: Optional[callable], Optional function to collate data batches for DataLoader.
+        - verbose: bool, If True, prints progress information (default is False).
+        """
 
         self.verbose = verbose
         self.device: torch.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-        self.dataset: BOSSDataset = BOSSDataset(spectra_paths, data_source)
-        self.model: torch.nn.module = BossNet()
-        self._load_model()
+        self.dataset = dataset
+        self.model = self._load_model(deconstructed_model_dir)
+        
+        self.param_list = param_list
+        self.stats = stats
 
         # If no output file specified, then predictions will be written to standard out.
         self.output_file = open(output_file, "a+") if output_file else sys.stdout
 
         self.num_uncertainty_draws: int = num_uncertainty_draws
         self.calculate_uncertainties: bool = num_uncertainty_draws > 0
-        
-        # Create standard grid for interpolation.
-        MIN_WL, MAX_WL, FLUX_LEN = 3800, 8900, 3900
-        linear_grid = torch.linspace(MIN_WL, MAX_WL, steps=FLUX_LEN)
-        self.interpolate_flux = partial(interpolate_flux, linear_grid=linear_grid)
-    
-    def _load_model(self):
+
+        self.collate_fn = collate_fn
+
+    def _load_model(self, deconstructed_model_dir: str) -> BossNet:
         """
-        Loads the BossNet model from disk.
+        Loads the BossNet model from disk, including its configuration and trained weights.
+
+        Args:
+        - deconstructed_model_dir: str, The directory containing the model's configuration and weights.
+
+        Returns:
+        - model: BossNet, The loaded model.
         """
-        model_path = os.path.join(os.path.split(os.path.abspath(__file__))[0], "deconstructed_model")
+        model_path = os.path.join(os.path.split(os.path.abspath(__file__))[0], deconstructed_model_dir)
+        model_args = open_yaml(os.path.join(model_path, "model_args.yaml"))
+        model = BossNet(**model_args)
         state_dict = franken_load(model_path, 10)
-        self.model.load_state_dict(state_dict, strict=False)
-        self.model.to(self.device)
-        self.model.eval()
+        model.load_state_dict(state_dict, strict=False)
+        model.to(self.device)
+        model.eval()
+        return model
     
-    def predict(self) -> None:
+    def predict(self, batch_size: int, num_workers: int) -> None:
         """
-        Runs the pipeline to generate predictions.
+        Runs the pipeline to generate predictions on the provided dataset. Optionally calculates uncertainties 
+        for each prediction if the `num_uncertainty_draws` is greater than zero.
+
+        This method iterates over the dataset in batches, makes predictions, and writes the results to the output file.
+
+        Returns:
+        - None
         """
         loader = torch.utils.data.DataLoader(
             self.dataset,  
-            num_workers=6, 
+            num_workers=num_workers, 
             shuffle=False,
+            batch_size=batch_size,
+            collate_fn=self.collate_fn,
         )
 
-        prediction_generator = self._make_prediction(loader)
-
         self._write_header()
-        for path in self.dataset.flux_paths:
-            preds, uncertainty_preds = next(prediction_generator)
-            if preds:
-                self._write_prediction(path, preds, uncertainty_preds)
-        self.output_file.close()
-        
-    def _make_prediction(self, loader: torch.utils.data.DataLoader):
-        """
-        Generates predictions and their uncertainties for a given data loader.
-
-        Args:
-            loader (torch.utils.data.DataLoader): A DataLoader object that loads the data for prediction.
-
-        Yields:
-            preds (PredictionOutput): The prediction output for each data input, including 
-                the predicted logg, logTeff, FeH, and rv values.
-
-            uncertainty_preds (UncertaintyOutput): The uncertainties associated with the predictions,
-                including median values and standard deviations of the predicted logg, 
-                logTeff, FeH, and rv values. This will only be yielded if self.calculate_uncertainties 
-                is set to True, else None is yielded.
-
-        Raises:
-            OSError: If there is an issue loading the data (like missing or corrupt FITS file).
-
-        """
-
-        loader = iter(tqdm(loader, desc="Evaluating Model: ", file=sys.stderr) if self.verbose else loader)
-        while loader:
-
-            try:
-                spectra, error, wavlen = next(loader)
-            except (OSError, TypeError):
-                if self.verbose:
-                    print(f"Missing, empty, or corrupt FITS file.", file=sys.stderr)
-                    yield None, None
-
-            # Interpolate and log scale spectra
-            interp_spectra = self.interpolate_flux(spectra, wavlen)
-            normalized_spectra = log_scale_flux(interp_spectra).float()
-
-            # Calculate and unnormalize steller parameter predictions
-            normalized_prediction = self.model(normalized_spectra.to(self.device))
-            prediction = unnormalize_predictions(normalized_prediction)
-            prediction = prediction.squeeze()
-
-            # Unpack stellar parameters
-            log_G = prediction[0].item()
-            log_Teff = prediction[1].item()
-            FeH = prediction[2].item()
-            rv = prediction[3].item()
-
-            preds = PredictionOutput(
-                log_G=log_G,
-                log_Teff=log_Teff,
-                FeH=FeH,
-                rv=rv,
-            )
-
-            uncertainty_preds = None
+        loader = tqdm(loader, desc="Predicting: ") if self.verbose else loader
+        for source_id_batch, flux_batch, error_batch, wavelen_batch in loader:
+            prediction_batch = self._make_prediction(flux_batch, wavelen_batch)
             if self.calculate_uncertainties:
-                # Get batch of noised spectra
-                uncertainties_batch = create_uncertainties_batch(spectra, error, self.num_uncertainty_draws)
 
-                # Interpolate and log scale sprectra
-                interp_uncertainties_batch = self.interpolate_flux(uncertainties_batch, wavlen)
-                normalized_uncertainties_batch = log_scale_flux(interp_uncertainties_batch).float()
-
-                # Calculate and unnormalize stellar parameters predictions
-                normalized_predictions_batch = self.model(normalized_uncertainties_batch.to(self.device))
-                prediction = unnormalize_predictions(normalized_predictions_batch)
-
-                # Calculate the median and std for each stellar parameter
-                median = torch.median(prediction, axis=0)[0]
-                std = torch.std(prediction, axis=0)
-
-                # Unpack medians
-                log_G_median = median[0].item()
-                log_Teff_median = median[1].item()
-                Feh_median = median[2].item()
-                rv_median = median[3].item()
-
-                # Unpack stds
-                log_G_std = std[0].item()
-                log_Teff_std = std[1].item()
-                Feh_std = std[2].item()
-                rv_std = std[3].item()
-            
-                uncertainty_preds = UncertaintyOutput(
-                    log_G_median=log_G_median,
-                    log_Teff_median=log_Teff_median,
-                    Feh_median=Feh_median,
-                    rv_median=rv_median,
-                    log_G_std=log_G_std,
-                    log_Teff_std=log_Teff_std,
-                    Feh_std=Feh_std,
-                    rv_std=rv_std
-                )
-
-            yield preds, uncertainty_preds
+                if (error_batch == -1).all():
+                    raise ValueError("Cannot calculate uncertainties: no error for specified data source.")
+                
+                prediction_batch_median, prediction_batch_std = self._make_uncertainty_prediction(flux_batch, error_batch, wavelen_batch)
+                self._write_prediction(source_id_batch, prediction_batch, prediction_batch_median, prediction_batch_std)
+            else:
+                self._write_prediction(source_id_batch, prediction_batch)
+        self.output_file.close()
 
     def _write_header(self) -> None:
-        """Writes the header of the output file, depending on whether uncertainties
-        are being calculated or not.
         """
-        if self.calculate_uncertainties:
-            self.output_file.write((
-                "path,logg,logTeff,FeH,rv,"
-                "logg_median,logTeff_median,FeH_median,rv_median,"
-                "logg_std,logTeff_std,FeH_std,rv_std\n"))
-        else:
-            self.output_file.write("path,logg,logTeff,FeH,rv\n")
-    
-    def _write_prediction(
-        self, file_path: str, preds: PredictionOutput, uncertainty_preds: UncertaintyOutput
-    ) -> None:
-        """
-        Writes the predictions for a given input to the output file.
-
-        Args:
-        - file_path (str): The path of the input file.
-        - preds (Tuple[float, float, float, float]): A tuple of predicted values,
-        containing the predicted logg, logteff, feh, and rv values, in that order.
-        - uncertainty_preds (Optional[Tuple[float, float, float, float, float, float, float, float]]): A tuple of
-        predicted uncertainties for the input file, containing the median values and standard
-        deviations of the predicted logg, logteff, feh, and rv values, in that order. This argument is
-        optional, and if it is not provided, the method will not output the uncertainty predictions
-        to the output file.
+        Writes the header of the output file, depending on whether uncertainties
+        are being calculated or not. The header includes the parameter names and, if applicable, 
+        their median and standard deviation.
 
         Returns:
-        - None: This method has no return value.
-
-        Output:
-        - This method writes a line to the output file, with comma-separated values for the input file
-        path, predicted logg, logteff, and feh values. If the `uncertainty_preds` argument is provided,
-        this line will also include the median values and standard deviations of the predicted
-        logg, logteff, feh, and rv values, in that order, separated by commas.
+        - None
         """
-        logg, logteff, feh, rv = preds
         if self.calculate_uncertainties:
-            logg_median, logteff_median, feh_median, rv_median, logg_std, logteff_std, feh_std, rv_std = uncertainty_preds
-            self.output_file.write((f"{file_path},{logg},{logteff},{feh},{rv},{logg_median},{logteff_median},{feh_median},{rv_median},{logg_std},{logteff_std},{feh_std},{rv_std}\n"))
+            header = ",".join(["id"] + self.param_list) + ","
+            header += ",".join([s + "_median" for s in self.param_list]) + ","
+            header += ",".join([s + "_std" for s in self.param_list]) + "\n"
         else:
-            self.output_file.write(f"{file_path},{logg},{logteff},{feh},{rv}\n")
+            header = ",".join(["id"] + self.param_list) + "\n"
+        self.output_file.write(header)
+    
+    def _write_prediction(
+        self, 
+        source_id_batch: torch.Tensor,
+        prediction_batch: torch.Tensor, 
+        prediction_batch_median: Optional[torch.Tensor]=None, 
+        prediction_batch_std: Optional[torch.Tensor]=None,
+    ) -> None:
+        """
+        Writes the predictions (and optionally their uncertainties) to the output file in CSV format.
+
+        Args:
+        - source_id_batch: torch.Tensor, The batch of source IDs.
+        - prediction_batch: torch.Tensor, The batch of predicted values.
+        - prediction_batch_median: Optional[torch.Tensor], The batch of median uncertainty predictions (default is None).
+        - prediction_batch_std: Optional[torch.Tensor], The batch of standard deviation uncertainty predictions (default is None).
+
+        Returns:
+        - None
+        """
+        if isinstance(source_id_batch, torch.Tensor):
+            source_id_batch = source_id_batch.tolist()
+
+        for i in range(len(source_id_batch)):
+            prediction_as_str = [str(pred) for pred in prediction_batch[i].cpu().tolist()]
+            csv_row = ",".join([str(source_id_batch[i])] + prediction_as_str)
+            if prediction_batch_median is not None:
+                median_as_str = [str(pred) for pred in prediction_batch_median[i].cpu().tolist()]
+                csv_row += "," + ",".join(median_as_str)
+
+                std_as_str = [str(pred) for pred in prediction_batch_std[i].cpu().tolist()]
+                csv_row += "," + ",".join(std_as_str)
+            self.output_file.write(csv_row + "\n")
+        
+    def _make_uncertainty_prediction(
+        self, 
+        flux_batch: torch.Tensor, 
+        error_batch: torch.Tensor, 
+        wavelen_batch: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Generates predictions by sampling multiple uncertainty batches and calculates the median and 
+        standard deviation of the predictions.
+
+        Args:
+        - flux_batch: torch.Tensor, A batch of flux values.
+        - error_batch: torch.Tensor, A batch of error values associated with the fluxes.
+        - wavelen_batch: torch.Tensor, A batch of wavelength values.
+
+        Returns:
+        - prediction_batch_median: torch.Tensor, The median of the predictions across uncertainty draws.
+        - prediction_batch_std: torch.Tensor, The standard deviation of the predictions across uncertainty draws.
+        """
+        predictions = []
+
+        for _ in range(self.num_uncertainty_draws):
+            uncertainties_batch = create_uncertainties_batch(flux_batch, error_batch)
+           
+            prediction_batch = self._make_prediction(uncertainties_batch, wavelen_batch)
+            predictions.append(prediction_batch.detach().cpu())
+        
+        predictions = torch.stack(predictions)
+        prediction_batch_median = torch.median(predictions, dim=0)[0]
+        prediction_batch_std = torch.std(predictions, dim=0)
+        return prediction_batch_median, prediction_batch_std
+    
+    @abstractmethod
+    def _make_prediction(self, flux_batch: torch.Tensor, wavelen_batch: torch.Tensor) -> torch.Tensor:
+        """
+        Responsible for generating predictions based on the provided flux and wavelength batches.
+
+        Args:
+        - flux_batch: torch.Tensor, A batch of flux values.
+        - wavelen_batch: torch.Tensor, A batch of wavelength values.
+
+        Returns:
+        - torch.Tensor: A tensor containing the predictions for the given batch.
+        """
+
+
+
+class BOSSNETPipeline(Pipeline):
+    def __init__(
+        self,
+        spectra_paths: str,
+        data_source: str,
+        **kwargs,
+    ) -> None:
+        deconstructed_model_dir = "model_boss"
+        param_list = ["logg", "logTeff", "FeH", "rv"]
+        dataset = BOSSDataset(file_path=spectra_paths,data_source=data_source)
+
+        super().__init__(
+            deconstructed_model_dir=deconstructed_model_dir, 
+            dataset=dataset, 
+            param_list=param_list, 
+            collate_fn=boss_collate,
+            **kwargs
+        )
+
+        MIN_WL, MAX_WL, FLUX_LEN = 3800, 8900, 3900
+        self.linear_grid = torch.linspace(MIN_WL, MAX_WL, steps=FLUX_LEN)
+    
+    def _make_prediction(self, flux_batch: torch.Tensor, wavelen_batch: torch.Tensor) -> None:
+        interp_spectra = interpolate_flux(flux_batch, wavelen_batch, self.linear_grid)
+        normalized_spectra = log_scale_flux_batch(interp_spectra).float()
+
+        normalized_prediction = self.model(normalized_spectra[:, None, :].to(self.device))
+        prediction_batch = unnormalize_predictions(normalized_prediction, self.param_list, self.stats)
+        return prediction_batch
+
+
+
+class ApogeeNetPipeline(Pipeline):
+    def __init__(
+        self, spectra_paths: str, **kwargs) -> None:
+        deconstructed_model_dir = "model_apogee"
+        param_list = ["logg", "logTeff", "FeH"]
+        dataset = BOSSDataset(file_path=spectra_paths, data_source="apogee")
+
+        super().__init__(
+            deconstructed_model_dir=deconstructed_model_dir, 
+            dataset=dataset, 
+            param_list=param_list,
+            **kwargs,
+        )
+    
+    def _make_prediction(self, flux_batch: torch.Tensor, wavelen_batch: torch.Tensor) -> torch.Tensor:
+        normalized_spectra = log_scale_flux_batch(flux_batch).float()
+
+        normalized_prediction = self.model(normalized_spectra[:, None, :].to(self.device))
+        prediction_batch = unnormalize_predictions(normalized_prediction, self.param_list, self.stats)
+        return prediction_batch
+
+
+class GAIAPipeline(Pipeline):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(param_list=["logg", "logTeff", "FeH"], **kwargs)
+    
+    def _make_prediction(self, flux_batch: torch.Tensor, wavelen_batch) -> torch.Tensor:
+        normalized_prediction = self.model(flux_batch[:, None, :].to(self.device))
+        prediction_batch = unnormalize_predictions(normalized_prediction,  self.param_list, self.stats)
+        return prediction_batch
+
+
+class GAIAGDR3Pipeline(GAIAPipeline):
+    def __init__(self, file_path: str, **kwargs) -> None:
+        dataset = GAIAGDR3Dataset(file_path=file_path)
+        super().__init__(deconstructed_model_dir="model_gaia_gdr3", dataset=dataset, **kwargs)
+
+
+class GAIAXpPipeline(GAIAPipeline):
+    def __init__(self, file_path, **kwargs) -> None:
+        dataset = GAIAXpDataset(file_path=file_path)
+        super().__init__(deconstructed_model_dir="model_gaia_xp", dataset=dataset, **kwargs)
