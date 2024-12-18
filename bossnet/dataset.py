@@ -389,7 +389,7 @@ class GAIAXpDataset(torch.utils.data.Dataset):
         """
         source_id = self.table['source_id'][index]
 
-        flux = np.concatenate([self.table['bp_coefficients'][index], self.table['bp_coefficients'][index]])
+        flux = np.concatenate([self.table['bp_coefficients'][index], self.table['rp_coefficients'][index]])
         flux = torch.from_numpy(flux).to(torch.float32)
         flux[torch.isnan(flux)] = 1
         return DatasetReturn(source_id, flux, -1, -1)
