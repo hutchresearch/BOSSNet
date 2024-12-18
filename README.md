@@ -1,5 +1,6 @@
 # BOSSNet
 [![DOI](https://zenodo.org/badge/610963244.svg)](https://zenodo.org/doi/10.5281/zenodo.10453134)
+
 *Credit: Logan Sizemore, Diego Llanes, Indie Cowan, Dyaln Huson*
 
 **BOSSNet** is a pipeline for predicting stellar parameters, including effective temperature, surface gravity, metallicity, and radial velocity. It supports various astronomical surveys and allows users to compute predictions with optional uncertainty estimates.
@@ -71,7 +72,7 @@ python bossnet <spectra_paths> -d <data_source> -o <output_file> -u <num_uncerta
 3. Use Gaia XP data with specific batch size and workers:
 
    ```bash
-   python bossnet gaia_spectra.ecsv -d gaia_xp -b 32 -w 4 -o gaia_predictions.txt
+   python bossnet gaia_spectra.csv.gz -d gaia_xp -b 32 -w 4 -o gaia_predictions.txt
    ```
 
 ## Output
