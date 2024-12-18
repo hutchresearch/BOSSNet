@@ -3,7 +3,7 @@ import sys
 import argparse
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from pipeline import BOSSNETPipeline, ApogeeNetPipeline, GAIAGDR3Pipeline, GAIAXpPipeline
+from pipeline import BOSSNETPipeline, ApogeeNetPipeline, GAIARVSPipeline, GAIAXpPipeline
 from utils import Stats, open_yaml, DataSource
 
 def parse_args():
@@ -63,8 +63,8 @@ def main() -> None:
             verbose=args.verbose
         )
 
-    elif args.data_source == DataSource.GAIAGDR3:
-        pipeline = GAIAGDR3Pipeline(
+    elif args.data_source == DataSource.GAIARVS:
+        pipeline = GAIARVSPipeline(
             file_path=args.spectra_paths,
             stats=stats,
             output_file=args.output_file,

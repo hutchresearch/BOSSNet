@@ -56,4 +56,4 @@ class DataSource(str, Enum):
     LAMOSTDR7="lamost_dr7"
     LAMOSTDR8="lamost_dr8"
     GAIAXP="gaia_xp"
-    GAIAGDR3="gaia_gdr3"
+    GAIARVS="gaia_rvs"

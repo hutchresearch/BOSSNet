@@ -313,7 +313,7 @@ class BOSSDataset(torch.utils.data.Dataset):
         return len(self.flux_paths)
     
 
-class GAIAGDR3Dataset(torch.utils.data.Dataset):
+class GAIARVSDataset(torch.utils.data.Dataset):
     def __init__(
         self, 
         file_path,

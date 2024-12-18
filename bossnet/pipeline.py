@@ -33,7 +33,7 @@ from typing import Optional, List, Tuple
 import tempfile
 from collections import OrderedDict
 from abc import ABC, abstractmethod
-from dataset import BOSSDataset, GAIAGDR3Dataset, GAIAXpDataset, boss_collate
+from dataset import BOSSDataset, GAIARVSDataset, GAIAXpDataset, boss_collate
 from model.boss_net import BossNet
 from utils import open_yaml, Stats
 from tqdm import tqdm
@@ -449,10 +449,10 @@ class GAIAPipeline(Pipeline):
         return prediction_batch
 
 
-class GAIAGDR3Pipeline(GAIAPipeline):
+class GAIARVSPipeline(GAIAPipeline):
     def __init__(self, file_path: str, **kwargs) -> None:
-        dataset = GAIAGDR3Dataset(file_path=file_path)
-        super().__init__(deconstructed_model_dir="model_gaia_gdr3", dataset=dataset, **kwargs)
+        dataset = GAIARVSDataset(file_path=file_path)
+        super().__init__(deconstructed_model_dir="model_gaia_rvs", dataset=dataset, **kwargs)
 
 
 class GAIAXpPipeline(GAIAPipeline):
