@@ -330,7 +330,6 @@ class GAIARVSDataset(torch.utils.data.Dataset):
         Returns:
         - flux: torch.Tensor, A torch.Tensor representing the flux values of the data.
         - error: torch.Tensor, A torch.Tensor representing the error values of the data.
-        - wavelength: torch.Tensor, A torch.Tensor representing the wavelength values of the data.
         """
         source_id = self.table['source_id'][index]
 
@@ -385,14 +384,24 @@ class GAIAXpDataset(torch.utils.data.Dataset):
         Returns:
         - flux: torch.Tensor, A torch.Tensor representing the flux values of the data.
         - error: torch.Tensor, A torch.Tensor representing the error values of the data.
-        - wavelength: torch.Tensor, A torch.Tensor representing the wavelength values of the data.
         """
         source_id = self.table['source_id'][index]
 
         flux = np.concatenate([self.table['bp_coefficients'][index], self.table['rp_coefficients'][index]])
         flux = torch.from_numpy(flux).to(torch.float32)
         flux[torch.isnan(flux)] = 1
-        return DatasetReturn(source_id, flux, -1, -1)
+
+        # Reconstruct the covariance matricies for error calculation.
+        bp_correlations = torch.from_numpy(self.table["bp_coefficient_correlations"][index]).to(torch.float32)
+        bp_error = torch.from_numpy(self.table["bp_coefficient_errors"][index]).to(torch.float32)
+        bp_covar_mat = self.reconstruct_covariance_matrix(bp_error, bp_correlations)
+
+        rp_correlations = torch.from_numpy(self.table["rp_coefficient_correlations"][index]).to(torch.float32)
+        rp_error = torch.from_numpy(self.table["rp_coefficient_errors"][index]).to(torch.float32)
+        rp_covar_mat = self.reconstruct_covariance_matrix(rp_error, rp_correlations)
+
+        covar_mat = torch.stack((bp_covar_mat, rp_covar_mat))
+        return DatasetReturn(source_id, flux, covar_mat, -1)
 
     def __len__(self) -> int:
         """
@@ -402,3 +411,32 @@ class GAIAXpDataset(torch.utils.data.Dataset):
         - length: int, The number of FITS files in the dataset.
         """
         return len(self.table)
+    
+    def reconstruct_covariance_matrix(self, errs, correlations):
+        """
+        Reconstructs a full symmetric covariance matrix from errors and correlations.
+
+        Args:
+            errs: torch.Tensor, Errors for each coefficient (1D tensor).
+            correlations: torch.Tensor, Flattened correlations (1D tensor).
+
+        Returns:
+            torch.Tensor: Reconstructed covariance matrix (2D tensor).
+        """
+        n = len(errs)
+        
+        covar = torch.zeros((n, n), dtype=torch.float32)
+        
+        # Diagonal
+        covar[torch.arange(n), torch.arange(n)] = errs**2
+        
+        # Create a lower triangular matrix of correlations
+        lower_triangular_indices = torch.tril_indices(n, n, -1)
+        covar[lower_triangular_indices[0], lower_triangular_indices[1]] = (
+            correlations * errs[lower_triangular_indices[0]] * errs[lower_triangular_indices[1]]
+        )
+        
+        # Make matrix symmetric.
+        covar = covar + covar.T - torch.diag(covar.diag())
+        
+        return covar

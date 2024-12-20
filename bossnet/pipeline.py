@@ -459,3 +459,49 @@ class GAIAXpPipeline(GAIAPipeline):
     def __init__(self, file_path, **kwargs) -> None:
         dataset = GAIAXpDataset(file_path=file_path)
         super().__init__(deconstructed_model_dir="model_gaia_xp", dataset=dataset, **kwargs)
+    
+    def _make_uncertainty_prediction(
+        self, 
+        flux_batch: torch.Tensor, 
+        error_batch: torch.Tensor, 
+        wavelen_batch: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Generates predictions by sampling multiple uncertainty batches and calculates the median and 
+        standard deviation of the predictions.
+
+        Args:
+        - flux_batch: torch.Tensor, A batch of flux values.
+        - error_batch: torch.Tensor, A batch of error values associated with the fluxes.
+        - wavelen_batch: torch.Tensor, A batch of wavelength values.
+
+        Returns:
+        - prediction_batch_median: torch.Tensor, The median of the predictions across uncertainty draws.
+        - prediction_batch_std: torch.Tensor, The standard deviation of the predictions across uncertainty draws.
+        """
+        predictions = []
+
+        bp_covar = error_batch[:, 0]
+        rp_covar = error_batch[:, 1]
+
+        bp_cholesky = torch.linalg.cholesky(bp_covar)
+        rp_cholesky = torch.linalg.cholesky(rp_covar)
+
+        for _ in range(self.num_uncertainty_draws):
+            bp_normal_sample = torch.randn(*bp_covar.shape[:2])[:, :, None]
+            rp_normal_sample = torch.randn(*rp_covar.shape[:2])[:, :, None]
+
+            bp_noise = torch.matmul(bp_cholesky, bp_normal_sample).squeeze()
+            rp_noise = torch.matmul(rp_cholesky, rp_normal_sample).squeeze()
+
+            noise = torch.hstack((bp_noise, rp_noise))
+
+            uncertainties_batch = flux_batch + noise
+           
+            prediction_batch = self._make_prediction(uncertainties_batch, wavelen_batch)
+            predictions.append(prediction_batch.detach().cpu())
+        
+        predictions = torch.stack(predictions)
+        prediction_batch_median = torch.median(predictions, dim=0)[0]
+        prediction_batch_std = torch.std(predictions, dim=0)
+        return prediction_batch_median, prediction_batch_std
