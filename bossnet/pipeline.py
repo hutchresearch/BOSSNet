@@ -3,7 +3,7 @@ The pipeline used for the BOSS Net, APOGEE Net, and GAIA Net models.
 This file includes the Pipeline object and any relevant resources.
 
 MIT License
-Copyright (c) 2024 hutchresearch
+Copyright (c) 2025 hutchresearch
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

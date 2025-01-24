@@ -3,7 +3,7 @@ The datasets used for the BOSS Net model.
 This file includes the BOSSDataset, GAIAGDR3Dataset, GAIAXpDataset object and any relevant resources.
 
 MIT License
-Copyright (c) 2024 hutchresearch
+Copyright (c) 2025 hutchresearch
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -169,36 +169,6 @@ def get_fits_function(data_source: DataSource) -> Callable:
         return open_lamost_fitsDR7
     if data_source == DataSource.LAMOSTDR8:
         return open_lamost_fitsDR8
-
-def boss_collate(batch):
-    fits_file_paths = []
-    fluxes = []
-    errors = []
-    wavlens = []
-    
-    max_len = max([len(item[1]) for item in batch]) 
-    
-    for item in batch:
-        fits_file_path, flux, error, wavlen = item
-        
-        padded_flux = torch.full((max_len,), float('nan'))
-        padded_error = torch.full((max_len,), float('nan'))
-        padded_wavlen = torch.full((max_len,), float('nan'))
-        
-        padded_flux[:len(flux)] = flux
-        padded_error[:len(error)] = error
-        padded_wavlen[:len(wavlen)] = wavlen
-        
-        fits_file_paths.append(fits_file_path)
-        fluxes.append(padded_flux)
-        errors.append(padded_error)
-        wavlens.append(padded_wavlen)
-
-    fluxes = torch.stack(fluxes)
-    errors = torch.stack(errors)
-    wavlens = torch.stack(wavlens)
-    
-    return fits_file_paths, fluxes, errors, wavlens
 
 
 def boss_collate(batch: List[Tuple[str, torch.Tensor, torch.Tensor, torch.Tensor]]) -> Tuple[List[str], torch.Tensor, torch.Tensor, torch.Tensor]:
