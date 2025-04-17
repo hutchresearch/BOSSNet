@@ -6,6 +6,7 @@
 **BOSSNet** is a pipeline for predicting stellar parameters, including effective temperature, surface gravity, metallicity, and radial velocity. It supports various astronomical surveys and allows users to compute predictions with optional uncertainty estimates.
 
 [BOSS Net Paper](https://iopscience.iop.org/article/10.3847/1538-3881/ad291d/meta)
+[GAIA Net Paper](https://arxiv.org/pdf/2503.02958)
 
 ## Supported Surveys
 
