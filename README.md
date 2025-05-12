@@ -1,7 +1,7 @@
 # BOSSNet
 [![DOI](https://zenodo.org/badge/610963244.svg)](https://zenodo.org/doi/10.5281/zenodo.10453134)
 
-*Credit: Logan Sizemore, Diego Llanes, Indie Cowan, Dyaln Huson*
+*Credit: Logan Sizemore, Diego Llanes, Indie Cowan, Dylan Huson*
 
 **BOSSNet** is a pipeline for predicting stellar parameters, including effective temperature, surface gravity, metallicity, and radial velocity. It supports various astronomical surveys and allows users to compute predictions with optional uncertainty estimates.
 
