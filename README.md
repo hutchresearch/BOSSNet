@@ -1,4 +1,4 @@
-# BOSSNet
+# BOSSNet and GAIANet
 [![DOI](https://zenodo.org/badge/610963244.svg)](https://zenodo.org/doi/10.5281/zenodo.10453134)
 
 *Credit: Logan Sizemore, Diego Llanes, Indie Cowan, Dylan Huson*
